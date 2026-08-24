@@ -34,11 +34,23 @@ EXPERIMENT_NAME="YOUR_EXPERIMENT_NAME" # Overrides the registered config's defau
 CHECKPOINT_PATH="YOUR_CHECKPOINT_PATH.ckpt"   # Trained trajdata_nuplan_scene_diff checkpoint
 
 # ========== Dataset ==========
-DATASET_PATH="YOUR_DATASET_ROOT_PATH"  # trajdata dataset root (see ctg_trajdata/DATASETS.md)
+# NOTE: trajdata_nuplan_scene_diff reads its data location from
+# `NuplanTrajdataSceneTrainConfig.trajdata_data_dirs`/`trajdata_source_valid`
+# in tbsim/configs/trajdata_nuplan_scene_config.py, NOT from a CLI flag --
+# train.py's --dataset_path only feeds the (unused-by-trajdata) legacy
+# `cfg.train.dataset_path` field. Edit that config file's
+# `trajdata_data_dirs` dict to point "nuplan_mini" (or whichever
+# trajdata_source_valid dataset you're using) at your real nuPlan data
+# root before running this script.
 
-# ========== Weights & Biases (optional -- only used if the registered
-#             config has train.logging.log_wandb enabled) ==========
+# ========== Weights & Biases ==========
+# NOTE: this registered config has train.logging.log_wandb=True by
+# default, and train.py asserts WANDB_APIKEY is set whenever wandb
+# logging is on (see `export WANDB_APIKEY=<key>` below). Skip this
+# entirely for a first smoke test by adding --debug (see below) --
+# debug mode suppresses all logging regardless of log_wandb/log_tb.
 WANDB_PROJECT="YOUR_WANDB_PROJECT"
+# export WANDB_APIKEY="YOUR_WANDB_API_KEY"
 
 cd "$(dirname "${BASH_SOURCE[0]}")/../.." || exit 1
 
@@ -46,11 +58,11 @@ python -W ignore scripts/train.py \
     --config_name trajdata_nuplan_scene_diff \
     --name "$EXPERIMENT_NAME" \
     --output_dir "$OUTPUT_DIR" \
-    --dataset_path "$DATASET_PATH" \
     --wandb_project_name "$WANDB_PROJECT" \
     --ckpt_path "$CHECKPOINT_PATH" \
     --validate_only \
     --eval_generation_quality \
     "$@"
     # ^ forward any extra overrides (e.g. --debug for a quick smoke run
-    #   on a couple of validation batches before a full baseline pass)
+    #   on a couple of validation batches before a full baseline pass --
+    #   also skips the WANDB_APIKEY requirement above)
