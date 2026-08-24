@@ -1,4 +1,5 @@
 import argparse
+import json
 import sys
 import os
 import socket
@@ -18,7 +19,7 @@ from tbsim.utils.trajdata_utils import set_global_trajdata_batch_env, set_global
 from tbsim.algos.factory import algo_factory
 
 os.environ["WANDB_DISABLE_CODE"] = "True"
-def main(cfg, auto_remove_exp_dir=False, debug=False):
+def main(cfg, auto_remove_exp_dir=False, debug=False, validate_only=False, ckpt_path=None):
     pl.seed_everything(cfg.seed)
 
     if cfg.env.name == "l5kit":
@@ -207,7 +208,21 @@ def main(cfg, auto_remove_exp_dir=False, debug=False):
         # overfit_batches=2
     )
 
-    trainer.fit(model=model, datamodule=datamodule)
+    if validate_only:
+        # ADCG-Diffusion's `py_func=validate` equivalent: skip training,
+        # load `ckpt_path`'s weights into the already-constructed `model`
+        # and run one validation pass (e.g. with
+        # cfg.algo.eval_generation_quality=True, this produces the
+        # generation-quality baseline for `trajdata_nuplan_scene_diff` --
+        # see scripts/testing/test_scene_diff_generation_metrics.sh).
+        assert ckpt_path is not None, "--validate_only requires --ckpt_path"
+        results = trainer.validate(model=model, datamodule=datamodule, ckpt_path=ckpt_path)
+        results_path = os.path.join(log_dir, "generation_quality_metrics.json")
+        with open(results_path, "w+") as f:
+            json.dump(results, f, indent=2)
+        print("validation results written to {}".format(results_path))
+    else:
+        trainer.fit(model=model, datamodule=datamodule)
 
 
 if __name__ == "__main__":
@@ -274,6 +289,31 @@ if __name__ == "__main__":
         "--debug", action="store_true", help="Debug mode, suppress wandb logging, etc."
     )
 
+    parser.add_argument(
+        "--ckpt_path",
+        type=str,
+        default=None,
+        help="Checkpoint to load weights from. Combined with --validate_only, mirrors ADCG-Diffusion's "
+        "`py_func=validate` + `+checkpoint.ckpt_path=...` pattern: run one validation pass against a "
+        "trained checkpoint instead of training.",
+    )
+
+    parser.add_argument(
+        "--validate_only",
+        action="store_true",
+        help="Skip training and run a single validation pass against --ckpt_path, dumping "
+        "results to <log_dir>/generation_quality_metrics.json. Requires --ckpt_path.",
+    )
+
+    parser.add_argument(
+        "--eval_generation_quality",
+        action="store_true",
+        help="Turn on ADCG-Diffusion/JARCD-style generation-quality metrics (physical validity / "
+        "map compliance / realism, see tbsim/utils/generation_quality_metrics.py) during validation. "
+        "Mirrors ADCG's `model.downstream_task=jarcd_generation_eval` override -- same registered "
+        "experiment/config, just an eval-mode switch overlaid at run time.",
+    )
+
     args = parser.parse_args()
 
     if args.config_name is not None:
@@ -306,6 +346,12 @@ if __name__ == "__main__":
 
     default_config.train.on_ngc = args.on_ngc
 
+    if args.eval_generation_quality:
+        default_config.algo.eval_generation_quality = True
+
+    if args.validate_only:
+        assert args.ckpt_path is not None, "--validate_only requires --ckpt_path"
+
     if args.debug:
         # Test policy rollout
         default_config.train.validation.every_n_steps = 5
@@ -327,4 +373,10 @@ if __name__ == "__main__":
         # default_config.eval.pop("trajdata")
 
     default_config.lock()  # Make config read-only
-    main(default_config, auto_remove_exp_dir=args.remove_exp_dir, debug=args.debug)
+    main(
+        default_config,
+        auto_remove_exp_dir=args.remove_exp_dir,
+        debug=args.debug,
+        validate_only=args.validate_only,
+        ckpt_path=args.ckpt_path,
+    )
