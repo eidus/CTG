@@ -26,6 +26,7 @@ from tbsim.models.base_models import (
 from tbsim.models.transformer_model import TransformerModel
 import tbsim.utils.tensor_utils as TensorUtils
 import tbsim.utils.metrics as Metrics
+import tbsim.utils.generation_quality_metrics as GenerationQualityMetrics
 from tbsim.utils.batch_utils import batch_utils
 from tbsim.policies.common import Plan, Action
 import tbsim.algos.algo_utils as AlgoUtils
@@ -2524,7 +2525,7 @@ class SceneDiffuserTrafficModel(pl.LightningModule):
         gt = TensorUtils.to_numpy(data_batch["target_positions"].reshape(B*M, T, -1))
         # (B, M, T) -> (B*M, T)
         avail = TensorUtils.to_numpy(data_batch["target_availabilities"].reshape(B*M, T))
-        
+
         # compute ADE & FDE based on trajectory samples
         conf = np.ones(sample_preds.shape[0:2]) / float(sample_preds.shape[1])
         metrics["ego_avg_ADE"] = Metrics.batch_average_displacement_error(gt, sample_preds, conf, avail, "mean").mean()
@@ -2539,6 +2540,41 @@ class SceneDiffuserTrafficModel(pl.LightningModule):
         metrics["ego_max_FPD"] = Metrics.batch_final_diversity(gt, sample_preds, conf, avail, "max").mean()
 
         return metrics
+
+    def _compute_generation_quality_metrics(self, pred_batch, data_batch):
+        """
+        ADCG-Diffusion/JARCD-style generation-quality metrics (design doc
+        section 8.1: physical validity, map compliance, realism), computed
+        purely on this same validation-time generation output that
+        `_compute_metrics` above already used for ADE/FDE/APD/FPD -- no
+        extra forward pass. Diversity is intentionally not duplicated here
+        since `_compute_metrics`'s APD/FPD (already computed jointly over
+        every agent, not just ego) already covers it. See
+        tbsim/utils/generation_quality_metrics.py for the ADCG->CTG
+        mapping and why the real future is used only as a realism
+        reference, never as generation conditioning.
+
+        Only called when `self.algo_config.eval_generation_quality` is
+        True (default False, so existing registered experiments are
+        unaffected) -- gated in `validation_step`.
+        """
+        predictions = pred_batch["predictions"]
+        metrics = {}
+        metrics.update(
+            GenerationQualityMetrics.physical_validity_rate(
+                predictions,
+                data_batch,
+                acc_limit=self.algo_config.eval_generation_acc_limit,
+                yaw_rate_limit=self.algo_config.eval_generation_yaw_rate_limit,
+                speed_limit=self.algo_config.eval_generation_speed_limit,
+            )
+        )
+        metrics.update(GenerationQualityMetrics.map_compliance_rate(predictions, data_batch))
+        metrics.update(
+            GenerationQualityMetrics.realism_jsd(predictions, data_batch, dt=self.algo_config.step_time)
+        )
+        # match _compute_metrics's convention (validation_epoch_end np.stacks these)
+        return {k: TensorUtils.to_numpy(v) for k, v in metrics.items()}
 
     def reset_parameters(self):
         self.ema_policy.load_state_dict(self.nets["policy"].state_dict())
@@ -2662,6 +2698,8 @@ class SceneDiffuserTrafficModel(pl.LightningModule):
                         return_diffusion=False,
                         return_guidance_losses=False, mode='training')
         metrics = self._compute_metrics(pout, batch)
+        if self.algo_config.eval_generation_quality:
+            metrics.update(self._compute_generation_quality_metrics(pout, batch))
         return_dict =  {"losses": losses, "metrics": metrics}
 
         # use EMA for val
@@ -2673,6 +2711,8 @@ class SceneDiffuserTrafficModel(pl.LightningModule):
                         return_diffusion=False,
                         return_guidance_losses=False, mode='training')
             ema_metrics = self._compute_metrics(pout, batch)
+            if self.algo_config.eval_generation_quality:
+                ema_metrics.update(self._compute_generation_quality_metrics(pout, batch))
             return_dict["ema_losses"] = ema_losses
             return_dict["ema_metrics"] = ema_metrics
 

@@ -753,7 +753,25 @@ class SceneDiffuserConfig(AlgoConfig):
 
         # how many samples to take for validation (during training)
         self.diffuser.num_eval_samples = 10
-        
+
+        # ADCG-Diffusion/JARCD-style generation-quality eval (design doc
+        # section 8.1: physical validity, map compliance, realism -- see
+        # tbsim/utils/generation_quality_metrics.py), computed purely on
+        # this SceneDiffuser's own validation-time generated output.
+        # Off by default so existing registered experiments (trajdata_nusc_scene_diff,
+        # trajdata_nuplan_scene_diff, ...) are unaffected; turn on via
+        # `--eval_generation_quality` (scripts/train.py) to run it as a
+        # baseline eval pass against `trajdata_nuplan_scene_diff`.
+        self.eval_generation_quality = False
+        # limits mirror this same config's own dynamics bounds above
+        # (self.dynamics.acce_bound / max_yawvel / max_speed), so a
+        # "physical validity" violation means the generated trajectory
+        # falls outside what this model's own unicycle dynamics allow --
+        # not an arbitrarily chosen threshold.
+        self.eval_generation_acc_limit = 10.0
+        self.eval_generation_yaw_rate_limit = math.pi * 2.0
+        self.eval_generation_speed_limit = 40.0
+
         # norm_info (x, y, vel, yaw, acc, yawvel)
         # nusc_train_val, hist=10, fut=20
         # self.nusc_norm_info = {
