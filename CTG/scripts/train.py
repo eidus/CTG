@@ -4,6 +4,7 @@ import sys
 import os
 import socket
 
+import torch
 import wandb
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger, WandbLogger
@@ -21,6 +22,11 @@ from tbsim.algos.factory import algo_factory
 os.environ["WANDB_DISABLE_CODE"] = "True"
 def main(cfg, auto_remove_exp_dir=False, debug=False, validate_only=False, ckpt_path=None):
     pl.seed_everything(cfg.seed)
+
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
 
     if cfg.env.name == "l5kit":
         set_global_batch_type("l5kit")
@@ -163,6 +169,8 @@ def main(cfg, auto_remove_exp_dir=False, debug=False, validate_only=False, ckpt_
     assert not (cfg.train.logging.log_tb and cfg.train.logging.log_wandb)
     logger = None
     if debug:
+        #
+        train_callbacks = []
         print("Debugging mode, suppress logging.")
     elif cfg.train.logging.log_tb:
         logger = TensorBoardLogger(
@@ -170,11 +178,9 @@ def main(cfg, auto_remove_exp_dir=False, debug=False, validate_only=False, ckpt_
         )
         print("Tensorboard event will be saved at {}".format(logger.log_dir))
     elif cfg.train.logging.log_wandb:
-        assert (
-            "WANDB_APIKEY" in os.environ
-        ), "Set api key by `export WANDB_APIKEY=<your-apikey>`"
-        apikey = os.environ["WANDB_APIKEY"]
-        wandb.login(key=apikey)
+        with open("/scratch/cilab/ujkim/wandb_key.yaml") as f:
+            apikey = f.read().strip().split("=", 1)[1].strip()
+        os.environ["WANDB_API_KEY"] = apikey
         logger = WandbLogger(
             name=cfg.name, project=cfg.train.logging.wandb_project_name
         )
@@ -187,6 +193,8 @@ def main(cfg, auto_remove_exp_dir=False, debug=False, validate_only=False, ckpt_
     # Train
     trainer = pl.Trainer(
         default_root_dir=root_dir,
+        precision="bf16",
+        profiler = "simple" if debug else None,
         # checkpointing
         enable_checkpointing=cfg.train.save.enabled,
         # logging
@@ -197,7 +205,8 @@ def main(cfg, auto_remove_exp_dir=False, debug=False, validate_only=False, ckpt_
         max_steps=cfg.train.training.num_steps,
         # validation
         val_check_interval=cfg.train.validation.every_n_steps,
-        limit_val_batches=cfg.train.validation.num_steps_per_epoch,
+        limit_val_batches=cfg.train.validation.num_steps_per_epoch if cfg.train.validation.enabled else 0,
+        num_sanity_val_steps=0,
         # all callbacks
         callbacks=train_callbacks,
         # device & distributed training setup

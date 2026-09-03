@@ -8,25 +8,31 @@ class NuplanTrajdataSceneTrainConfig(TrajdataTrainConfig):
     def __init__(self):
         super(NuplanTrajdataSceneTrainConfig, self).__init__()
 
-        self.trajdata_cache_location = "~/.unified_data_cache"
-        self.trajdata_source_train = ["nuplan_mini-mini_train"]
-        self.trajdata_source_valid = ["nuplan_mini-mini_val"]
+        # self.trajdata_cache_location = "~/.unified_data_cache"
+        self.trajdata_cache_location = "/scratch/cilab/ujkim/.unified_data_cache"
+        self.trajdata_source_train = [
+            "nuplan_train-boston",
+            "nuplan_train-pittsburgh",
+            "nuplan_train-singapore",
+            "nuplan_train-las_vegas",
+        ]
+        self.trajdata_source_valid = self.trajdata_source_train
         # dict mapping dataset IDs -> root path
         #       all datasets that will be used must be included here
         self.trajdata_data_dirs = {
-            "nuplan_mini" : "../behavior-generation-dataset/nuplan/dataset/nuplan-v1.1",
+            "nuplan_train" : "/scratch/cilab/ujkim/data/nuPlan/root",
         }
 
         # for debug
         self.trajdata_rebuild_cache = False
 
-        self.rollout.enabled = True
-        self.rollout.save_video = True
+        self.rollout.enabled = False # True
+        self.rollout.save_video = False # True
         self.rollout.every_n_steps = 10000
         self.rollout.warm_start_n_steps = 0
 
         # training config
-        self.training.batch_size = 4 # 100
+        self.training.batch_size = 32 # 100
         self.training.num_steps = 100000
         self.training.num_data_workers = 8
 
@@ -37,7 +43,7 @@ class NuplanTrajdataSceneTrainConfig(TrajdataTrainConfig):
         self.validation.enabled = True
         self.validation.batch_size = 1 # 32
         self.validation.num_data_workers = 6
-        self.validation.every_n_steps = 500
+        self.validation.every_n_steps = 2000
         self.validation.num_steps_per_epoch = 5 # 50
 
         self.on_ngc = False

@@ -245,6 +245,11 @@ def transform_xyh_np(xyh: np.ndarray, tf_mat: np.ndarray) -> np.ndarray:
 
 
 def agent_aware_diff(values: np.ndarray, agent_ids: np.ndarray) -> np.ndarray:
+    if values.shape[0] == 0:
+        # No agents survived the single-detection filter for this scene --
+        # nothing to diff.
+        return values.copy()
+    
     values_diff: np.ndarray = np.diff(
         values, axis=0, prepend=values[[0]] - (values[[1]] - values[[0]])
     )

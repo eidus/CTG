@@ -81,18 +81,22 @@ class UnifiedDataModule(pl.LightningDataModule):
             num_workers=self._train_config.training.num_data_workers,
             drop_last=True,
             collate_fn=self.train_dataset.get_collate_fn(return_dict=True),
-            persistent_workers=True
+            persistent_workers=True,
+            prefetch_factor=1, #
+            pin_memory=True,
         )
 
     def val_dataloader(self):
         return DataLoader(
             dataset=self.valid_dataset,
-            shuffle=True,
+            shuffle=False,
             batch_size=self._train_config.validation.batch_size,
             num_workers=self._train_config.validation.num_data_workers,
             drop_last=True,
             collate_fn=self.valid_dataset.get_collate_fn(return_dict=True),
-            persistent_workers=True
+            persistent_workers=True,
+            prefetch_factor=1,
+            pin_memory=True,
         )
 
     def test_dataloader(self):
@@ -205,7 +209,7 @@ class PassUnifiedDataModule(pl.LightningDataModule):
     def val_dataloader(self):
         return DataLoader(
             dataset=self.valid_dataset,
-            shuffle=True, # since pytorch lightning only evals a subset of val on each epoch, shuffle
+            shuffle=False, # since pytorch lightning only evals a subset of val on each epoch, shuffle
             batch_size=self._train_config.validation.batch_size,
             num_workers=self._train_config.validation.num_data_workers,
             drop_last=True,

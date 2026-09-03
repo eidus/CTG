@@ -680,7 +680,7 @@ class SceneDiffuserConfig(AlgoConfig):
         self.predict_epsilon = False
 
         self.clip_denoised = False
-        self.loss_type = 'l2_with_agent_collision_and_map_collision' # 'l2'
+        self.loss_type = "l2" # 'l2_with_agent_collision_and_map_collision' # 'l2'
 
         #
         # Exponential moving average
@@ -752,7 +752,7 @@ class SceneDiffuserConfig(AlgoConfig):
         # self.optim_params.policy.regularization.L2 = 0.00  # L2 regularization strength
 
         # how many samples to take for validation (during training)
-        self.diffuser.num_eval_samples = 10
+        self.diffuser.num_eval_samples = 4 # 10
 
         # ADCG-Diffusion/JARCD-style generation-quality eval (design doc
         # section 8.1: physical validity, map compliance, realism -- see

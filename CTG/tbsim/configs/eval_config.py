@@ -128,8 +128,19 @@ class EvaluationConfig(Dict):
         self.adjustment.num_frame_per_new_agent = 20
 
         # to compat nusc with scene_editor 
-        self.trajdata.trajdata_cache_location = "~/.unified_data_cache"
+        self.trajdata.trajdata_cache_location = "/scratch/cilab/ujkim/.unified_data_cache"
         self.trajdata.trajdata_rebuild_cache = False
+        self.trajdata.trajdata_source_test = [
+                "nuplan_train-boston", 
+                "nuplan_train-pittsburgh", 
+                "nuplan_train-singapore",
+                "nuplan_train-las_vegas",
+            ]
+        self.trajdata.trajdata_data_dirs = { "nuplan_train": "/scratch/cilab/ujkim/data/nuPlan/root",}
+        self.trajdata.eval_scenes = [0]
+        self.trajdata.n_step_action = 5
+        self.trajdata.num_simulation_steps = 200
+        self.trajdata.skip_first_n = 0
         #----------------------------------------------------------------------------------------------
 
     def clone(self):

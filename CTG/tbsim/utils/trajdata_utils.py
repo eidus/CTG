@@ -172,7 +172,7 @@ def get_drivable_region_map(maps):
         elif env_name in ['orca_maps', 'orca_no_maps']: # if using a mixed dataset, orca_no_maps may have dummy map layers to parse
             # drivable_range = (-2, -1)
             drivable_layers = [0] #[-2]
-        elif env_name in ['nuplan_mini']:
+        elif env_name in ['nuplan_mini'] or env_name.startswith('nuplan'):
             drivable_layers = [0]
         else:
             raise NotImplementedError("Must implement get_drivable_region_map for any new dataset from trajdata")
@@ -1165,60 +1165,92 @@ def convert_scene_data_to_agent_coordinates(data, merge_BM=False, max_neighbor_n
     B, M, _, _ = data["history_positions"].shape
 
     for pos_k, yaw_k, avai_k in zip(["history_positions", "target_positions"], ["history_yaws", "target_yaws"], ["history_availabilities", "target_availabilities"]):
-        pos_k_list, yaw_k_list = [], []
-        for i in range(B):
-            pos_k_i = GeoUtils.transform_points_tensor(data[pos_k][i],data["agents_from_center"][i])*new_data[avai_k][i].unsqueeze(-1)
-            yaw_k_i = data[yaw_k][i]-new_data['yaw'][i][:, None, None]+new_data['yaw'][i][0]*new_data[avai_k][i].unsqueeze(-1)
+        # vectorized over B (and M): flatten (B, M, T, ...) -> (B*M, T, ...) so transform_points_tensor
+        # can batch-transform every agent's trajectory in a single call instead of one python call per scene.
+        T_k = data[pos_k].shape[2]
+        pos_flat = data[pos_k].reshape(B * M, T_k, 2)
+        mat_flat = data["agents_from_center"].reshape(B * M, 3, 3)
+        pos_transformed = GeoUtils.transform_points_tensor(pos_flat, mat_flat).reshape(B, M, T_k, 2)
 
-            pos_k_list.append(pos_k_i)
-            yaw_k_list.append(yaw_k_i)
+        avail = new_data[avai_k].unsqueeze(-1)  # (B, M, T, 1)
+        new_data[pos_k] = pos_transformed * avail
 
-        new_data[pos_k] = torch.stack(pos_k_list, dim=0)
-        new_data[yaw_k] = angle_wrap(torch.stack(yaw_k_list, dim=0))
+        yaw_self = new_data['yaw'][:, :, None, None]      # (B, M, 1, 1)
+        yaw0 = new_data['yaw'][:, 0].reshape(B, 1, 1, 1)   # (B, 1, 1, 1), yaw of agent 0 in each scene
+        new_data[yaw_k] = angle_wrap(data[yaw_k] - yaw_self + yaw0 * avail)
 
 
     if 'closest_lane_point' in data['extras']:
         B, M, S_seg, S_p, _ = data['extras']['closest_lane_point'].shape
-        closest_lanes_points_list = []
-        for i in range(B):
-            # [M, S_seg, S_p, 3] -> [M, S_seg*S_p, 3]
-            closest_lane_point = data['extras']['closest_lane_point'][i].reshape(M, S_seg*S_p, -1)
-            closest_lane_point_pos = closest_lane_point[..., :2] # [M, S_seg*S_p, 2]
-            closest_lane_point_yaw = closest_lane_point[..., [2]] # [M, S_seg*S_p, 1]
+        # [B, M, S_seg, S_p, 3] -> [B, M, S_seg*S_p, 3], vectorized over B (and M) the same way as above
+        closest_lane_point = data['extras']['closest_lane_point'].reshape(B, M, S_seg * S_p, -1)
+        closest_lane_point_pos = closest_lane_point[..., :2]  # [B, M, S_seg*S_p, 2]
+        closest_lane_point_yaw = closest_lane_point[..., [2]]  # [B, M, S_seg*S_p, 1]
 
-            closest_lane_point_pos_transformed = GeoUtils.transform_points_tensor(closest_lane_point_pos,data["agents_from_center"][i])
-            closest_lane_point_yaw_transformed = angle_wrap(closest_lane_point_yaw-new_data["yaw"][i][:, None, None]+new_data["yaw"][i, 0])
+        pos_flat = closest_lane_point_pos.reshape(B * M, S_seg * S_p, 2)
+        mat_flat = data["agents_from_center"].reshape(B * M, 3, 3)
+        closest_lane_point_pos_transformed = GeoUtils.transform_points_tensor(pos_flat, mat_flat).reshape(B, M, S_seg * S_p, 2)
 
-            closest_lanes_points = torch.cat((closest_lane_point_pos_transformed, closest_lane_point_yaw_transformed), -1).reshape(M, S_seg, S_p, -1)
+        yaw_self = new_data["yaw"][:, :, None, None]     # (B, M, 1, 1)
+        yaw0 = new_data["yaw"][:, 0].reshape(B, 1, 1, 1)  # (B, 1, 1, 1)
+        closest_lane_point_yaw_transformed = angle_wrap(closest_lane_point_yaw - yaw_self + yaw0)
 
-            closest_lanes_points_list.append(closest_lanes_points)
-        new_data['extras'] = {'closest_lane_point': torch.stack(closest_lanes_points_list, dim=0)}
+        closest_lanes_points = torch.cat((closest_lane_point_pos_transformed, closest_lane_point_yaw_transformed), -1).reshape(B, M, S_seg, S_p, -1)
+        new_data['extras'] = {'closest_lane_point': closest_lanes_points}
 
     # "all_other_agents_history_positions", "all_other_agents_history_yaws"
     # "all_other_agents_history_speeds", "all_other_agents_extents", "all_other_agents_history_availabilities", "all_other_agents_types"
     # get neighbor indices for each agent
 
-    all_other_agents_history_positions_list = []
-    all_other_agents_history_yaws_list = []
-    all_other_agents_history_speeds_list = []
-    all_other_agents_extent_list = []
-    all_other_agents_types_list = []
-    all_other_agents_history_availabilities_list = []
+    if keep_order_of_neighbors:
+        # Fast vectorized path: with keep_order_of_neighbors=True every agent's neighbor set is
+        # ALL M agents (itself included) in a fixed order, regardless of distance -- same as what
+        # the loop-based code below computes for this case, just without the per-(scene, agent)
+        # python loop and the per-iteration `.tolist()` GPU->CPU syncs that made it slow.
+        hist_avail = new_data["history_availabilities"]  # (B, M, T)
+        hist_pos = new_data["history_positions"]          # (B, M, T, 2)
+        hist_yaw = new_data["history_yaws"]                # (B, M, T, 1)
+        agent_from_world = new_data["agent_from_world"]    # (B, M, 3, 3)
+        world_from_agent = new_data["world_from_agent"]    # (B, M, 3, 3)
+        yaw = new_data["yaw"]                                # (B, M)
 
-    for i in range(B):
+        # center_from_neigh[n, j, k] = agent_from_world[n, j] @ world_from_agent[n, k]
+        center_from_neigh = torch.einsum("njab,nkbc->njkac", agent_from_world, world_from_agent)  # (B, M, M, 3, 3)
 
-        # M, T
-        # print('new_data["history_availabilities"].shape', data["history_availabilities"][i].shape, data["history_availabilities"][i])
-        # print('(data["history_availabilities"]==np.nan).to(float).shape', (data["history_availabilities"][i]==np.nan).to(float).shape)
-        avail = torch.sum((data["history_availabilities"][i]==True).to(float), dim=-1)
-        # print('avail', avail.shape, avail)
-        unavail_inds = torch.where(avail==0)[0]
-        # print('avail_inds', avail_inds.shape, avail_inds)
+        points = hist_pos.unsqueeze(1).expand(-1, M, -1, -1, -1).float()  # (B, J, K, T, 2), same across J
+        transf_T = center_from_neigh.permute(0, 1, 2, 4, 3).float()        # (B, J, K, 3, 3)
+        pos_out = points @ transf_T[..., :2, :2] + transf_T[..., -1:, :2]  # (B, J, K, T, 2)
+        avail_bc = hist_avail.unsqueeze(1)  # (B, 1, K, T)
+        pos_out = pos_out * avail_bc.unsqueeze(-1)
 
-        # (M, M, 2) - (1, M, 2) -> (M, M)
-        if keep_order_of_neighbors:
-            nb_idx = torch.arange(M).unsqueeze(0).repeat(M, 1)
-        else:
+        yaw_out = (
+            hist_yaw.squeeze(-1).unsqueeze(1)         # (B, 1, K, T)   hist_yaw[k, t]
+            + yaw.unsqueeze(1).unsqueeze(-1)           # (B, 1, K, 1)   + yaw[k]
+            - yaw.unsqueeze(2).unsqueeze(-1) * avail_bc  # (B, J, 1, 1)   - yaw[j] * avail[k, t]
+        ).unsqueeze(-1)
+        yaw_out = angle_wrap(yaw_out)
+
+        new_data["all_other_agents_history_positions"] = pos_out
+        new_data["all_other_agents_history_yaws"] = yaw_out
+        new_data["all_other_agents_history_speeds"] = new_data["history_speeds"].unsqueeze(1).expand(-1, M, -1, -1).contiguous()
+        new_data["all_other_agents_extents"] = new_data["extent"].unsqueeze(1).expand(-1, M, -1, -1).contiguous()
+        new_data["all_other_agents_types"] = new_data["type"].unsqueeze(1).expand(-1, M, -1).contiguous()
+        new_data["all_other_agents_history_availabilities"] = hist_avail.unsqueeze(1).expand(-1, M, -1, -1).contiguous()
+    else:
+        all_other_agents_history_positions_list = []
+        all_other_agents_history_yaws_list = []
+        all_other_agents_history_speeds_list = []
+        all_other_agents_extent_list = []
+        all_other_agents_types_list = []
+        all_other_agents_history_availabilities_list = []
+
+        for i in range(B):
+
+            # M, T
+            avail = torch.sum((data["history_availabilities"][i]==True).to(float), dim=-1)
+            unavail_inds = torch.where(avail==0)[0]
+
+            # (M, M, 2) - (1, M, 2) -> (M, M)
             agent_distances = torch.linalg.norm(TensorUtils.unsqueeze_expand_at(new_data['centroid'][i],M,1) - new_data['centroid'][i].unsqueeze(0), axis=-1)
 
             agent_distances[:, unavail_inds] = np.inf
@@ -1226,7 +1258,7 @@ def convert_scene_data_to_agent_coordinates(data, merge_BM=False, max_neighbor_n
 
             nb_idx = agent_distances.argsort(dim=1)
             agent_distances_sorted = agent_distances.sort(dim=1).values
-            
+
 
             # (M, M) -> (M, Q) set those outside the distance limit to False
             if max_neighbor_num is not None:
@@ -1239,52 +1271,52 @@ def convert_scene_data_to_agent_coordinates(data, merge_BM=False, max_neighbor_n
             # mark those outside the distance limit (M, M)
             nb_idx[agent_distances_sorted >= max_neighbor_dist] = -1
 
-        all_other_agents_history_positions_list_sub = []
-        all_other_agents_history_yaws_list_sub = []
-        all_other_agents_history_speeds_list_sub = []
-        all_other_agents_extent_list_sub = []
-        all_other_agents_types_list_sub = []
-        all_other_agents_history_availabilities_list_sub = []
+            all_other_agents_history_positions_list_sub = []
+            all_other_agents_history_yaws_list_sub = []
+            all_other_agents_history_speeds_list_sub = []
+            all_other_agents_extent_list_sub = []
+            all_other_agents_types_list_sub = []
+            all_other_agents_history_availabilities_list_sub = []
 
-        agent_from_world = new_data['agent_from_world'][i]
-        world_from_agent = new_data['world_from_agent'][i]
-        
-        for j in range(M):
-            chosen_neigh_inds = nb_idx[j][nb_idx[j]>=0].tolist()
+            agent_from_world = new_data['agent_from_world'][i]
+            world_from_agent = new_data['world_from_agent'][i]
 
-            # (Q. 3. 3)
-            center_from_world = agent_from_world[j]
-            world_from_neigh = world_from_agent[chosen_neigh_inds]
-            center_from_neigh = center_from_world.unsqueeze(0) @ world_from_neigh
-            
-            hist_neigh_avail_b_sub = new_data["history_availabilities"][i][chosen_neigh_inds]
+            for j in range(M):
+                chosen_neigh_inds = nb_idx[j][nb_idx[j]>=0].tolist()
 
-            hist_neigh_pos_b_sub = new_data["history_positions"][i][chosen_neigh_inds]
-            hist_neigh_yaw_b_sub = new_data["history_yaws"][i][chosen_neigh_inds]
+                # (Q. 3. 3)
+                center_from_world = agent_from_world[j]
+                world_from_neigh = world_from_agent[chosen_neigh_inds]
+                center_from_neigh = center_from_world.unsqueeze(0) @ world_from_neigh
 
-            all_other_agents_history_positions_list_sub.append(GeoUtils.transform_points_tensor(hist_neigh_pos_b_sub,center_from_neigh)*hist_neigh_avail_b_sub.unsqueeze(-1))
-            all_other_agents_history_yaws_list_sub.append(hist_neigh_yaw_b_sub+new_data["yaw"][i][chosen_neigh_inds][:,None,None]-new_data["yaw"][i][j]*hist_neigh_avail_b_sub.unsqueeze(-1))
-            all_other_agents_history_speeds_list_sub.append(new_data["history_speeds"][i][chosen_neigh_inds])
-            all_other_agents_extent_list_sub.append(new_data["extent"][i][chosen_neigh_inds])
-            all_other_agents_history_availabilities_list_sub.append(hist_neigh_avail_b_sub)
-            all_other_agents_types_list_sub.append(new_data["type"][i][chosen_neigh_inds])
+                hist_neigh_avail_b_sub = new_data["history_availabilities"][i][chosen_neigh_inds]
 
-        all_other_agents_history_positions_list.append(pad_sequence(all_other_agents_history_positions_list_sub, batch_first=True, padding_value=np.nan))
-        all_other_agents_history_yaws_list.append(pad_sequence(all_other_agents_history_yaws_list_sub, batch_first=True, padding_value=np.nan))
-        all_other_agents_history_speeds_list.append(pad_sequence(all_other_agents_history_speeds_list_sub, batch_first=True, padding_value=np.nan))
-        all_other_agents_extent_list.append(pad_sequence(all_other_agents_extent_list_sub, batch_first=True, padding_value=0))
-        all_other_agents_types_list.append(pad_sequence(all_other_agents_types_list_sub, batch_first=True, padding_value=0))
-        all_other_agents_history_availabilities_list.append(pad_sequence(all_other_agents_history_availabilities_list_sub, batch_first=True, padding_value=0))
-        
+                hist_neigh_pos_b_sub = new_data["history_positions"][i][chosen_neigh_inds]
+                hist_neigh_yaw_b_sub = new_data["history_yaws"][i][chosen_neigh_inds]
 
-    max_second_dim = max(a.size(1) for a in all_other_agents_history_positions_list)
+                all_other_agents_history_positions_list_sub.append(GeoUtils.transform_points_tensor(hist_neigh_pos_b_sub,center_from_neigh)*hist_neigh_avail_b_sub.unsqueeze(-1))
+                all_other_agents_history_yaws_list_sub.append(hist_neigh_yaw_b_sub+new_data["yaw"][i][chosen_neigh_inds][:,None,None]-new_data["yaw"][i][j]*hist_neigh_avail_b_sub.unsqueeze(-1))
+                all_other_agents_history_speeds_list_sub.append(new_data["history_speeds"][i][chosen_neigh_inds])
+                all_other_agents_extent_list_sub.append(new_data["extent"][i][chosen_neigh_inds])
+                all_other_agents_history_availabilities_list_sub.append(hist_neigh_avail_b_sub)
+                all_other_agents_types_list_sub.append(new_data["type"][i][chosen_neigh_inds])
 
-    new_data["all_other_agents_history_positions"] = torch.stack([torch.nn.functional.pad(tensor, (0, 0, 0, 0, 0, max_second_dim - tensor.size(1), 0, 0)) for tensor in all_other_agents_history_positions_list], dim=0)
-    new_data["all_other_agents_history_yaws"] = angle_wrap(torch.stack([torch.nn.functional.pad(tensor, (0, 0, 0, 0, 0, max_second_dim - tensor.size(1), 0, 0)) for tensor in all_other_agents_history_yaws_list], dim=0))
-    new_data["all_other_agents_history_speeds"] = torch.stack([torch.nn.functional.pad(tensor, (0, 0, 0, max_second_dim - tensor.size(1), 0, 0)) for tensor in all_other_agents_history_speeds_list], dim=0)
-    new_data["all_other_agents_extents"] = torch.stack([torch.nn.functional.pad(tensor, (0, 0, 0, max_second_dim - tensor.size(1), 0, 0)) for tensor in all_other_agents_extent_list], dim=0)
-    new_data["all_other_agents_types"] = torch.stack([torch.nn.functional.pad(tensor, (0, max_second_dim - tensor.size(1), 0, 0)) for tensor in all_other_agents_types_list], dim=0)
-    new_data["all_other_agents_history_availabilities"] = torch.stack([torch.nn.functional.pad(tensor, (0, 0, 0, max_second_dim - tensor.size(1), 0, 0)) for tensor in all_other_agents_history_availabilities_list], dim=0)
+            all_other_agents_history_positions_list.append(pad_sequence(all_other_agents_history_positions_list_sub, batch_first=True, padding_value=np.nan))
+            all_other_agents_history_yaws_list.append(pad_sequence(all_other_agents_history_yaws_list_sub, batch_first=True, padding_value=np.nan))
+            all_other_agents_history_speeds_list.append(pad_sequence(all_other_agents_history_speeds_list_sub, batch_first=True, padding_value=np.nan))
+            all_other_agents_extent_list.append(pad_sequence(all_other_agents_extent_list_sub, batch_first=True, padding_value=0))
+            all_other_agents_types_list.append(pad_sequence(all_other_agents_types_list_sub, batch_first=True, padding_value=0))
+            all_other_agents_history_availabilities_list.append(pad_sequence(all_other_agents_history_availabilities_list_sub, batch_first=True, padding_value=0))
+
+
+        max_second_dim = max(a.size(1) for a in all_other_agents_history_positions_list)
+
+        new_data["all_other_agents_history_positions"] = torch.stack([torch.nn.functional.pad(tensor, (0, 0, 0, 0, 0, max_second_dim - tensor.size(1), 0, 0)) for tensor in all_other_agents_history_positions_list], dim=0)
+        new_data["all_other_agents_history_yaws"] = angle_wrap(torch.stack([torch.nn.functional.pad(tensor, (0, 0, 0, 0, 0, max_second_dim - tensor.size(1), 0, 0)) for tensor in all_other_agents_history_yaws_list], dim=0))
+        new_data["all_other_agents_history_speeds"] = torch.stack([torch.nn.functional.pad(tensor, (0, 0, 0, max_second_dim - tensor.size(1), 0, 0)) for tensor in all_other_agents_history_speeds_list], dim=0)
+        new_data["all_other_agents_extents"] = torch.stack([torch.nn.functional.pad(tensor, (0, 0, 0, max_second_dim - tensor.size(1), 0, 0)) for tensor in all_other_agents_extent_list], dim=0)
+        new_data["all_other_agents_types"] = torch.stack([torch.nn.functional.pad(tensor, (0, max_second_dim - tensor.size(1), 0, 0)) for tensor in all_other_agents_types_list], dim=0)
+        new_data["all_other_agents_history_availabilities"] = torch.stack([torch.nn.functional.pad(tensor, (0, 0, 0, max_second_dim - tensor.size(1), 0, 0)) for tensor in all_other_agents_history_availabilities_list], dim=0)
 
     new_data["scene_index"] = torch.arange(B).unsqueeze(-1).repeat(1, M)
     if merge_BM:
@@ -1389,7 +1421,7 @@ def add_scene_dim_to_agent_data(obs):
 
     return new_obs
 
-def load_vec_map(map_name, cache_path="~/.unified_data_cache"):
+def load_vec_map(map_name, cache_path="/scratch/cilab/ujkim/.unified_data_cache"):
     cache_path = Path(cache_path).expanduser()
     mapAPI = MapAPI(cache_path)
     vec_map = mapAPI.get_map(map_name, scene_cache=None)

@@ -9,12 +9,17 @@ class NuplanTrajdataAllTrainConfig(TrajdataTrainConfig):
         super(NuplanTrajdataAllTrainConfig, self).__init__()
 
         self.trajdata_cache_location = "~/.unified_data_cache"
-        self.trajdata_source_train = ["nuplan_mini-mini_train"]
-        self.trajdata_source_valid = ["nuplan_mini-mini_val"]
+        self.trajdata_source_train = [
+            "nuplan_train-boston",
+            "nuplan_train-pittsburgh",
+            "nuplan_train-singapore",
+            "nuplan_train-las_vegas",
+        ]
+        self.trajdata_source_valid = self.trajdata_source_train
         # dict mapping dataset IDs -> root path
         #       all datasets that will be used must be included here
         self.trajdata_data_dirs = {
-            "nuplan_mini" : "../behavior-generation-dataset/nuplan/dataset/nuplan-v1.1",
+            "nuplan_train" : "/scratch/cilab/ujkim/data/nuPlan/root",
         }
 
         # for debug

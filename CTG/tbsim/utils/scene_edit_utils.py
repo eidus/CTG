@@ -910,7 +910,7 @@ def make_segments(x, y):
 def get_trajdata_renderer(desired_data, data_dirs, future_sec=2.0, history_sec=1.0,
                             raster_size=500, px_per_m=5, 
                             rebuild_maps=False,
-                            cache_location='~/.unified_data_cache'):
+                            cache_location='/scratch/cilab/ujkim/.unified_data_cache'):
     kwargs = dict(
         cache_location=cache_location,
         desired_data=desired_data,
