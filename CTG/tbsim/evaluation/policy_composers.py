@@ -95,6 +95,12 @@ class GroundTruth(PolicyComposer):
                 exp_cfg = get_registered_experiment_config("trajdata_nusc_bc")
             elif 'l5' in self.eval_config.registered_name:
                 exp_cfg = get_registered_experiment_config("trajdata_l5_bc")
+            else:
+                # GTPolicy has no weights -- it replays obs["target_positions"] -- so exp_cfg only
+                # shapes the eval dataset. Reuse the config under evaluation so this baseline runs
+                # at the same step_time/horizon as the model it is compared against; the *_bc
+                # configs above are 0.1s, which would silently change the rollout length.
+                exp_cfg = get_registered_experiment_config(self.eval_config.registered_name)
         else:
             raise NotImplementedError("invalid env {}".format(self.eval_config.env))
         return GTPolicy(device=self.device), exp_cfg

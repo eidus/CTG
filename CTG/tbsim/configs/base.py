@@ -31,6 +31,7 @@ class TrainConfig(Dict):
         ## training config
         self.training.batch_size = 100
         self.training.num_steps = 100000
+        self.training.min_steps = 0
         self.training.num_data_workers = 0
 
         ## validation config
@@ -39,6 +40,11 @@ class TrainConfig(Dict):
         self.validation.num_data_workers = 0
         self.validation.every_n_steps = 1000
         self.validation.num_steps_per_epoch = 100
+
+        ## early stopping config
+        self.early_stopping.enabled = False
+        self.early_stopping.patience = 10
+        self.early_stopping.min_delta = 1e-4
 
         ## Training parallelism (e.g., multi-GPU)
         self.parallel_strategy = "ddp_spawn"
@@ -93,7 +99,7 @@ class ExperimentConfig(Dict):
         )
 
         self.root_dir = "{}_trained_models/".format(self.algo.name)
-        self.seed = 1  # seed for everything (for reproducibility)
+        self.seed = 2 # 1  # seed for everything (for reproducibility)
 
         self.devices.num_gpus = 1  # Set to 0 to use CPU
 

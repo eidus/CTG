@@ -62,7 +62,9 @@ def guided_rollout(
     # set up guidance and constraints, and associated metrics
     added_metrics = [] # save for removal later
 
-    if len(guidance_config) > 0:
+    # Both configs default to None in the signature, which is what editing_source="none" passes
+    # down; treat that as "nothing to set up" rather than indexing into it.
+    if len(guidance_config or []) > 0:
         # only set guidance for those support inner perturbation; filtration is currently considered as separate outside wrapper
         if apply_guidance and eval_class in ['SceneDiffuser', 'Diffuser', 'TrafficSim', 'BC', 'HierarchicalSampleNew']:
             # reset so that we can get an example batch to initialize guidance more efficiently
@@ -77,7 +79,7 @@ def guided_rollout(
         guidance_metrics = guidance_metrics_from_config(guidance_config)
         env._metrics.update(guidance_metrics)  
         added_metrics += guidance_metrics.keys()
-    if len(constraint_config) > 0:
+    if len(constraint_config or []) > 0:
         # TODO : right now constraint metric only makes sense in open-loop setting
         if apply_constraints and eval_class in ['SceneDiffuser', 'Diffuser']:
             policy_model.set_constraints(constraint_config)

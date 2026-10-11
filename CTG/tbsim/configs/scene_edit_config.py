@@ -121,6 +121,21 @@ class SceneEditingConfig(EvaluationConfig):
             self.trajdata.n_step_action = 5
             self.trajdata.num_simulation_steps = 100
             self.trajdata.skip_first_n = 0
+        elif 'nuplan' in registered_name:
+            # The defaults above are the nuScenes 0.1s figures. env_builders recomputes the real
+            # values as future_num_frames * step_time, so these two are documentation rather than
+            # something the dataset reads -- but leaving 5.2 here reads as a 5.2s horizon that
+            # this model does not have (10 frames * 0.5s = 5.0s).
+            self.trajdata.future_sec = 5.0   # 10 * 0.5
+            self.trajdata.history_sec = 3.0  # 6 * 0.5
+
+            self.trajdata.num_scenes_to_evaluate = 5 #  100
+            self.trajdata.eval_scenes = [3,4, 86, 87, 93]# np.arange(100).tolist()
+            self.trajdata.n_step_action = 5
+            # nuPlan scenes run 298-400 frames at the raw 20Hz (15-20s), which is only 30-40 steps
+            # at dt=0.5 -- the nuScenes value of 100 would run past the end of every scene.
+            self.trajdata.num_simulation_steps = 30
+            self.trajdata.skip_first_n = 0
         else:
             print('-'*20)
             print('not supported registered_name: '+registered_name)

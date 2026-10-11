@@ -1,0 +1,16 @@
+{
+  "env": "nuplan_test",
+  "num": 512,
+  "strategy": "per_log",
+  "min_length": 360,
+  "seed": 0,
+  "total_scenes_in_split": 19281,
+  "total_logs_in_split": 1349,
+  "selected_unique_logs": 512,
+  "cities": {
+    "las_vegas": 287,
+    "singapore": 97,
+    "boston": 66,
+    "pittsburgh": 62
+  }
+}

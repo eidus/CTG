@@ -64,6 +64,7 @@ from tbsim.configs.trajdata_nusc_scene_config import (
 )
 from tbsim.configs.trajdata_nuplan_scene_config import (
     NuplanTrajdataSceneTrainConfig,
+    NuplanTrajdataSceneDt05TrainConfig,
     NuplanTrajdataSceneEnvConfig
 )
 
@@ -84,6 +85,7 @@ from tbsim.configs.algo_config import (
     DiffuserConfig,
     STRIVEConfig,
     SceneDiffuserConfig,
+    NuplanSceneDiffuserDt05Config,
 )
 
 
@@ -439,6 +441,17 @@ EXP_CONFIG_REGISTRY["trajdata_nuplan_scene_diff"] = ExperimentConfig(
     env_config=NuplanTrajdataSceneEnvConfig(),
     algo_config=SceneDiffuserConfig(),
     registered_name="trajdata_nuplan_scene_diff"
+)
+
+# dt=0.5 (2Hz) variant -- see NuplanSceneDiffuserDt05Config for what changed vs. the 0.1s default.
+# Reuses the same env config as trajdata_nuplan_scene_diff (doesn't depend on step_time), but uses
+# a dedicated train config (more validation batches + early stopping -- see
+# NuplanTrajdataSceneDt05TrainConfig) so the base 0.1s experiment is unaffected.
+EXP_CONFIG_REGISTRY["trajdata_nuplan_scene_diff_dt05"] = ExperimentConfig(
+    train_config=NuplanTrajdataSceneDt05TrainConfig(),
+    env_config=NuplanTrajdataSceneEnvConfig(),
+    algo_config=NuplanSceneDiffuserDt05Config(),
+    registered_name="trajdata_nuplan_scene_diff_dt05"
 )
 
 EXP_CONFIG_REGISTRY["trajdata_drivesim_diff"] = ExperimentConfig(

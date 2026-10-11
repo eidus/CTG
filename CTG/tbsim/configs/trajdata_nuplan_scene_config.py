@@ -16,14 +16,29 @@ class NuplanTrajdataSceneTrainConfig(TrajdataTrainConfig):
             "nuplan_train-singapore",
             "nuplan_train-las_vegas",
         ]
-        self.trajdata_source_valid = self.trajdata_source_train
+        # Held-out nuPlan val split. Previously this aliased trajdata_source_train, which made
+        # every val/* metric a training-set metric.
+        self.trajdata_source_valid = [
+            "nuplan_val-boston",
+            "nuplan_val-pittsburgh",
+            "nuplan_val-singapore",
+            "nuplan_val-las_vegas",
+        ]
         # dict mapping dataset IDs -> root path
         #       all datasets that will be used must be included here
+        # NOTE: trajdata looks for logs in <path>/trainval/*.db for every non-mini nuplan env
+        # (nuplan_dataset.py load_dataset_obj), and resolves maps from <path>/../maps -- so each
+        # path below must be a directory directly under data/nuPlan/ containing a trainval/ entry.
         self.trajdata_data_dirs = {
             "nuplan_train" : "/scratch/cilab/ujkim/data/nuPlan/root",
+            "nuplan_val" : "/scratch/cilab/ujkim/data/nuPlan/val",
         }
 
         # for debug
+        # NOTE: leave False. This flag also forces rebuild_maps (see trajdata_datamodules.py), so
+        # flipping it re-bakes already-valid scene and map caches. To pick up newly added logs,
+        # delete <cache>/<env>/scenes_list.dill instead -- env_is_cached() only tests for that file,
+        # so the scene index is rebuilt while cached scenes and maps are reused.
         self.trajdata_rebuild_cache = False
 
         self.rollout.enabled = False # True
@@ -32,7 +47,7 @@ class NuplanTrajdataSceneTrainConfig(TrajdataTrainConfig):
         self.rollout.warm_start_n_steps = 0
 
         # training config
-        self.training.batch_size = 32 # 100
+        self.training.batch_size = 96 # 100
         self.training.num_steps = 100000
         self.training.num_data_workers = 8
 
@@ -64,6 +79,25 @@ class NuplanTrajdataSceneTrainConfig(TrajdataTrainConfig):
             'dist_weight': 1.0,
             'heading_weight': 0.1,
         }
+
+
+class NuplanTrajdataSceneDt05TrainConfig(NuplanTrajdataSceneTrainConfig):
+    """
+    Same as NuplanTrajdataSceneTrainConfig, except validation looks at more batches per check
+    (dt=0.5 sequences are ~5x shorter, so validation is cheaper -- can afford a less noisy signal)
+    and early stopping is turned on. Kept separate so the base 0.1s experiment is unaffected.
+    """
+    def __init__(self):
+        super(NuplanTrajdataSceneDt05TrainConfig, self).__init__()
+
+        # 5 -> 20 batches per validation check: with early stopping now watching this signal,
+        # a noisy 5-batch (batch_size=1) estimate risks triggering on fluctuation, not a real plateau.
+        self.validation.num_steps_per_epoch = 100
+
+        self.early_stopping.enabled = False # early stop turning
+        self.early_stopping.patience = 10
+        self.early_stopping.min_delta = 1e-4
+        self.training.min_steps = 60000
 
 
 class NuplanTrajdataSceneEnvConfig(TrajdataEnvConfig):

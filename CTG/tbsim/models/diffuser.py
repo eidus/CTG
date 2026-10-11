@@ -796,7 +796,10 @@ class DiffuserModel(nn.Module):
         # else:
         #     assert RuntimeError()
 
-        if self.disable_control_on_stationary:
+        # see the note at scenediffuser.py p_mean_variance: without the `is not None` guard,
+        # x_recon[None] is np.newaxis (not masking) and the assignment below wipes all of
+        # x_recon with a constant whenever stationary_mask was never set (e.g. validation).
+        if self.disable_control_on_stationary and self.stationary_mask is not None:
             if self.diffuser_input_mode == 'state_and_action':
                 inds = [4, 5]
             else:

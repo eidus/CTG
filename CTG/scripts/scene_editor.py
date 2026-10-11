@@ -220,7 +220,10 @@ def run_scene_editor(eval_cfg, save_cfg, data_to_disk, render_to_video, render_t
             continue
 
         # remove agents from agent_collision guidance if they are in chosen gptcollision pair
-        for si in range(len(guidance_config)):
+        # editing_source="none" leaves guidance_config at its None initialization -- every other
+        # consumer below already treats None as "no guidance" (guided_rollout defaults to it, and
+        # the render block tests `guidance_config is None`), so match that here.
+        for si in range(len(guidance_config or [])):
             if len(guidance_config[si]) > 0:
                 agent_collision_heur_ind = None
                 gpt_collision_heur_ind = None

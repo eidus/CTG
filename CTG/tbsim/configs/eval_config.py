@@ -130,13 +130,16 @@ class EvaluationConfig(Dict):
         # to compat nusc with scene_editor 
         self.trajdata.trajdata_cache_location = "/scratch/cilab/ujkim/.unified_data_cache"
         self.trajdata.trajdata_rebuild_cache = False
+        # Held-out nuPlan test split. This used to point at nuplan_train, i.e. final numbers were
+        # reported on the training data. TrainTimeEvaluationConfig overrides this back to val so
+        # that test is only ever touched by a deliberate final evaluation.
         self.trajdata.trajdata_source_test = [
-                "nuplan_train-boston", 
-                "nuplan_train-pittsburgh", 
-                "nuplan_train-singapore",
-                "nuplan_train-las_vegas",
+                "nuplan_test-boston",
+                "nuplan_test-pittsburgh",
+                "nuplan_test-singapore",
+                "nuplan_test-las_vegas",
             ]
-        self.trajdata.trajdata_data_dirs = { "nuplan_train": "/scratch/cilab/ujkim/data/nuPlan/root",}
+        self.trajdata.trajdata_data_dirs = { "nuplan_test": "/scratch/cilab/ujkim/data/nuPlan/test",}
         self.trajdata.eval_scenes = [0]
         self.trajdata.n_step_action = 5
         self.trajdata.num_simulation_steps = 200
@@ -154,5 +157,14 @@ class TrainTimeEvaluationConfig(EvaluationConfig):
         self.num_scenes_per_batch = 4
         self.nusc.eval_scenes = np.arange(0, 100, 10).tolist()
         self.l5kit.eval_scenes = self.l5kit.eval_scenes[:20]
+
+        # Rollouts during training are a tuning signal, so they must not see the test split.
+        self.trajdata.trajdata_source_test = [
+                "nuplan_val-boston",
+                "nuplan_val-pittsburgh",
+                "nuplan_val-singapore",
+                "nuplan_val-las_vegas",
+            ]
+        self.trajdata.trajdata_data_dirs = { "nuplan_val": "/scratch/cilab/ujkim/data/nuPlan/val",}
 
         self.policy.sample = False

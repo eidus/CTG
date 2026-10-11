@@ -13,8 +13,7 @@ from torch import Tensor
 
 import os
 
-def main(dataset_to_use, dataset_loader_to_use, centric, keys_to_compute, hist_sec = 1.0, fut_sec = 2.0, steps = None, agent_types = [AgentType.VEHICLE]):
-    dt = 0.1
+def main(dataset_to_use, dataset_loader_to_use, centric, keys_to_compute, hist_sec = 1.0, fut_sec = 2.0, steps = None, agent_types = [AgentType.VEHICLE], dt = 0.1, cache_location = "~/.unified_data_cache", seed = None, out_dir = "examples"):
 
     interaction_d = 50 # distance to scene ego to be included. [30, 50, np.inf]
     max_agent_num = None # scene-centric
@@ -25,9 +24,12 @@ def main(dataset_to_use, dataset_loader_to_use, centric, keys_to_compute, hist_s
     else:
         dataloader_batch_size = 50
         
+    if seed is not None:
+        torch.manual_seed(seed)
+
     if dataset_loader_to_use == "unified":
         dataset = UnifiedDataset(
-            desired_data=[dataset_to_use],
+            desired_data=dataset_to_use if isinstance(dataset_to_use, list) else [dataset_to_use],
             centric=centric,
             desired_dt=dt,
             history_sec=(hist_sec, hist_sec),
@@ -48,8 +50,9 @@ def main(dataset_to_use, dataset_loader_to_use, centric, keys_to_compute, hist_s
                 "lyft_val": "../behavior-generation-dataset/lyft_prediction/scenes/validate.zarr",
                 "lyft_train": "../behavior-generation-dataset/lyft_prediction/scenes/train.zarr",
                 "nuplan_mini": "../behavior-generation-dataset/nuplan/dataset/nuplan-v1.1",
+                "nuplan_train": "/scratch/cilab/ujkim/data/nuPlan/root",
             },
-            cache_location="~/.unified_data_cache",
+            cache_location=cache_location,
             num_workers=os.cpu_count()//2,
             rebuild_cache=False,
             rebuild_maps=False,
@@ -165,7 +168,8 @@ def main(dataset_to_use, dataset_loader_to_use, centric, keys_to_compute, hist_s
 
     
     compile_data = {state_name:np.concatenate(state_list, axis=0) for state_name, state_list in compile_data.items()}
-    path = 'examples/traj_data_'+dataset_to_use+'_'+centric+'_'+str(hist_sec)+'_'+str(fut_sec)
+    dataset_tag = dataset_to_use if isinstance(dataset_to_use, str) else "_".join(dataset_to_use)
+    path = out_dir+'/traj_data_'+dataset_tag+'_'+centric+'_'+str(hist_sec)+'_'+str(fut_sec)+'_dt'+str(dt)+'_steps'+str(steps)+'_seed'+str(seed)
     np.savez(path, **compile_data)
     print('data saved at', path)
 

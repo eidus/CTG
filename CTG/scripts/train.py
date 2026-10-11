@@ -129,6 +129,19 @@ def main(cfg, auto_remove_exp_dir=False, debug=False, validate_only=False, ckpt_
             )
             train_callbacks.append(ckpt_valid_callback)
 
+    if cfg.train.early_stopping.enabled:
+        train_callbacks.append(
+            pl.callbacks.EarlyStopping(
+                monitor=model.checkpoint_monitor_keys["valLoss"],
+                mode="min",
+                patience=cfg.train.early_stopping.patience,
+                min_delta=cfg.train.early_stopping.min_delta,
+                verbose=True,
+                check_finite=True,
+                check_on_train_epoch_end=False,
+            )
+        )
+
     if cfg.train.rollout.enabled and cfg.train.save.save_best_rollout:
         assert (
             cfg.train.save.every_n_steps > cfg.train.rollout.every_n_steps
@@ -203,6 +216,7 @@ def main(cfg, auto_remove_exp_dir=False, debug=False, validate_only=False, ckpt_
         log_every_n_steps=cfg.train.logging.log_every_n_steps,
         # training
         max_steps=cfg.train.training.num_steps,
+        min_steps=cfg.train.training.min_steps, 
         # validation
         val_check_interval=cfg.train.validation.every_n_steps,
         limit_val_batches=cfg.train.validation.num_steps_per_epoch if cfg.train.validation.enabled else 0,

@@ -751,6 +751,14 @@ class SceneDiffuserConfig(AlgoConfig):
         )  # epochs where LR decay occurs
         # self.optim_params.policy.regularization.L2 = 0.00  # L2 regularization strength
 
+        # Step-wise LR schedule, applied by SceneDiffuserTrafficModel.configure_optimizers.
+        # "none" keeps the constant-LR behaviour every existing experiment was tuned with;
+        # "cosine" warms up linearly for warmup_steps, then decays from `initial` down to
+        # initial * min_lr_ratio over the trainer's max_steps. Opt-in per experiment.
+        self.optim_params.policy.learning_rate.scheduler = "none"  # ["none", "cosine"]
+        self.optim_params.policy.learning_rate.warmup_steps = 0
+        self.optim_params.policy.learning_rate.min_lr_ratio = 0.0
+
         # how many samples to take for validation (during training)
         self.diffuser.num_eval_samples = 4 # 10
 
@@ -857,3 +865,50 @@ class SceneDiffuserConfig(AlgoConfig):
         #     'diffuser': [( 8.629487, 5.702340, 2.851898, 0.049617, 0.049150, 0.009598,  ), ( 31.293472, 16.655573, 22.489195, 1.454194, 494.963470, 0.558987,  )],
         #     'agent_hist': [( 4.966475, 6.206179, 2.524934, 3.378294, 1.602678,  ), ( 33.760521, 17.976578, 3.399076, 1.637678, 0.459216,  )],
         # }
+
+
+class NuplanSceneDiffuserDt05Config(SceneDiffuserConfig):
+    """
+    Variant of SceneDiffuserConfig for a coarser 0.5s (2Hz) trajectory timestep instead of the
+    default 0.1s (10Hz). Kept as a separate subclass so existing nuScenes/nuPlan 0.1s experiments
+    are unaffected.
+    """
+    def __init__(self):
+        super(NuplanSceneDiffuserDt05Config, self).__init__()
+
+        self.step_time = 0.5
+
+        # 6 * 0.5 = 3.0s history (same real-world span as the 30 * 0.1 = 3.0s default)
+        self.history_num_frames = 6
+        self.history_num_frames_ego = self.history_num_frames
+        self.history_num_frames_agents = self.history_num_frames
+
+        # 10 * 0.5 = 5.0s future (closest clean round-number match to the 52 * 0.1 = 5.2s default;
+        # SceneTransformer handles arbitrary horizon lengths, unlike TemporalMapUnet which would
+        # need horizon % 8 == 0)
+        self.horizon = 10
+        self.future_num_frames = self.horizon
+
+        # Tried cosine decay (2k warmup, down to 1% of 1e-4) to break the val-loss plateau that
+        # starts around 30k steps -- scene_diff_run7 vs the constant-LR scene_diff_run6. It did
+        # not help: on 100 nuPlan test scenes the two are indistinguishable on collision, jerk,
+        # speed and ADE/FDE, and run7 is slightly *worse* on off-road rate (0.076 vs 0.066,
+        # paired Wilcoxon p=0.005) and critical failures (0.320 vs 0.292, p=0.015). Reverted to
+        # the constant LR; the scheduler itself stays available via learning_rate.scheduler.
+        # The plateau is not an LR problem -- the large gap to ground truth is off-road rate
+        # (22x), and loss_weights.offroad_loss / collision_loss are both still 0.0.
+
+        # nuplan, vehicle, hist=6, fut=10, dt=0.5 -- recomputed via
+        # ctg_trajdata/examples/compute_norm_info.py (dt=0.5, hist_sec=3.0, fut_sec=5.0).
+        # 'diffuser'/'agent_hist'/'agent_hist_diff' from a 20,000-batch shuffled sample (stable to
+        # <5% against a 10,000-batch run with a different seed). 'neighbor_hist'/'neighbor_fut' from
+        # the full training split (51,341 batches) -- smaller samples underestimated their
+        # length/width std (rare large vehicles like trucks/buses are underrepresented in a subsample),
+        # so those two needed the full population rather than a subsample.
+        self.nuplan_norm_info = {
+            'diffuser': [( 5.103326, 0.012683, 2.209983, 0.001643, 0.017485, -0.000822,  ), ( 8.316113, 1.098659, 3.255834, 0.163117, 0.476154, 0.077262,  )],
+            'agent_hist_diff': [( -2.292633, 0.004553, 1.517716, -0.000247, -0.009434, -0.001115,  ), ( 4.268249, 0.214418, 5.179867, 0.092497, 18.260435, 0.128349,  )],
+            'agent_hist': [( -2.698565, 0.006202, 2.203120, 4.987252, 2.087865,  ), ( 4.862145, 0.299155, 3.154777, 0.652371, 0.200391,  )],
+            'neighbor_hist': [( 3.678381, -2.502293, 1.131886, 1.374180, 0.522738,  ), ( 16.847813, 13.331880, 2.182027, 2.260025, 0.960297,  )],
+            'neighbor_fut': [( 4.024341, -2.334726, 0.980324, 1.094270, 0.380190,  ), ( 14.824997, 12.355166, 2.210907, 2.331485, 0.877617,  )],
+        }

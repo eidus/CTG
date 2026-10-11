@@ -884,9 +884,8 @@ class SceneDiffuserModel(nn.Module):
             # (B*N, M, M, T_hist, K_neigh) -> (B*N, M, M, K_neigh) -> (B*N, M, M, 1, K_neigh) -> (B*N, M, M, T_fut, K_neigh) (x,y,cos,sin,speed,l,w,avail) or (x,y,cos,sin,vx,vy,l,w,avail)
             neighbor_fut = aux_info['neighbor_hist_feat'][...,-1,:].unsqueeze(-2).repeat(1,1,1,T_fut,1)
             if self.interaction_edge_speed_repr in ['rel_vel', 'rel_vel_new', 'rel_vel_per_step', 'rel_vel_new_new']:
-                dt = 0.1
-                # Get a time weight with shape (T_fut) from 0.1 to 0.1*T_fut
-                time = torch.arange(1, T_fut+1, dtype=torch.float32, device=neighbor_fut.device) * dt
+                # Get a time weight with shape (T_fut) from dt to dt*T_fut
+                time = torch.arange(1, T_fut+1, dtype=torch.float32, device=neighbor_fut.device) * self.dt
                 # (T_fut) -> (1, 1, 1, T_fut)
                 time = time.unsqueeze(0).unsqueeze(0).unsqueeze(0).unsqueeze(-1)
                 neighbor_fut[...,:2] = neighbor_fut[...,:2] + neighbor_fut[...,4:6] * time
@@ -1354,7 +1353,13 @@ class SceneDiffuserModel(nn.Module):
         # else:
         #     assert RuntimeError()
         
-        if self.disable_control_on_stationary:
+        # NOTE: the `is not None` guard matters. stationary_mask is only filled in by the
+        # algo's forward() during rollout; validation_step calls this model directly, so it
+        # stays None there. `x_recon[None]` is not boolean masking -- it is np.newaxis, so
+        # without this guard the assignment below silently overwrote the *entire* x_recon
+        # with a constant at every denoising step (matches the guard used at
+        # algos.py:2075/2853 and multiagent_algos.py:153).
+        if self.disable_control_on_stationary and self.stationary_mask is not None:
             if self.diffuser_input_mode == 'state_and_action':
                 inds = [4, 5]
             else:
@@ -1429,7 +1434,12 @@ class SceneDiffuserModel(nn.Module):
         guide_losses = dict()
         x_guidance = None
         # consider intermediate and final guidance (for ablation) separately
-        if apply_guidance and self.guidance_optimization_params is not None:
+        # current_guidance is None whenever set_guidance() was never called -- e.g. an
+        # editing_source="none" rollout, where apply_guidance is still True from the config but
+        # there is nothing to guide towards. perturb() asserts on that, so skip the block and
+        # fall through to the x_guidance is None path below.
+        if apply_guidance and self.guidance_optimization_params is not None \
+                and self.current_perturbation_guidance.current_guidance is not None:
             if t[0] == 0:
                 apply_guidance = self.apply_guidance_output
                 if apply_guidance:

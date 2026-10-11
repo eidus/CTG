@@ -2,6 +2,13 @@ wandb/
 videos/
 figures/
 checkpoints
+
+## eval outputs: keep stats.json / config.json / the eval scene lists, drop the bulk.
+## data.hdf5 is ~167MB per 100-scene run, over GitHub's 100MB per-file hard limit.
+*.hdf5
+eval_results/**/viz/
+## trajdata normalisation sweep scratch (9.8GB)
+norm_info_dt05/
 experiments/
 visualizations/
 results/

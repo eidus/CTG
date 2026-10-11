@@ -2467,6 +2467,8 @@ class SceneDiffuserTrafficModel(pl.LightningModule):
             disable_control_on_stationary=self.disable_control_on_stationary,
 
             coordinate=self.coordinate,
+
+            dt=algo_config.step_time,
         )
 
         # set up initial guidance and constraints
@@ -2737,10 +2739,59 @@ class SceneDiffuserTrafficModel(pl.LightningModule):
 
     def configure_optimizers(self):
         optim_params = self.algo_config.optim_params["policy"]
-        return optim.Adam(
+        lr_params = optim_params["learning_rate"]
+        optimizer = optim.Adam(
             params=self.nets["policy"].parameters(),
-            lr=optim_params["learning_rate"]["initial"],
+            lr=lr_params["initial"],
         )
+
+        schedule = lr_params.get("scheduler", "none")
+        if schedule == "none":
+            return optimizer
+        if schedule != "cosine":
+            raise ValueError(
+                "Unknown learning_rate.scheduler '%s' (expected 'none' or 'cosine')" % schedule
+            )
+
+        # Cosine decay needs to know how long the run is. max_steps is what actually stops
+        # training (scripts/train.py passes cfg.train.training.num_steps), so anchor to it rather
+        # than to epochs -- an epoch here is however many batches the dataset happens to yield,
+        # which changes whenever the data mix does.
+        total_steps = self.trainer.max_steps
+        if total_steps is None or total_steps <= 0:
+            raise ValueError(
+                "learning_rate.scheduler='cosine' requires Trainer(max_steps=...) to be set; "
+                "got max_steps=%r" % (total_steps,)
+            )
+        warmup_steps = int(lr_params.get("warmup_steps", 0))
+        min_lr_ratio = float(lr_params.get("min_lr_ratio", 0.0))
+        decay_steps = max(1, total_steps - warmup_steps)
+
+        def lr_scale(step):
+            if step < warmup_steps:
+                return float(step + 1) / float(max(1, warmup_steps))
+            progress = min(1.0, float(step - warmup_steps) / float(decay_steps))
+            cosine = 0.5 * (1.0 + np.cos(np.pi * progress))
+            return min_lr_ratio + (1.0 - min_lr_ratio) * cosine
+
+        print(
+            "SCENE DIFFUSER: cosine LR %g -> %g over %d steps (%d warmup)"
+            % (
+                lr_params["initial"],
+                lr_params["initial"] * min_lr_ratio,
+                total_steps,
+                warmup_steps,
+            )
+        )
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_scale),
+                # Step-wise, not epoch-wise: see the max_steps note above.
+                "interval": "step",
+                "frequency": 1,
+            },
+        }
 
     def get_plan(self, obs_dict, **kwargs):
         plan = kwargs.get("plan", None)
